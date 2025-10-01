@@ -26,7 +26,11 @@ class ImageLoader {
     if (this.frames != null) {
       this.state = LoadState.success;
       onComplete();
+      return;
     }
+
+    // Ensure we start with loading state
+    this.state = LoadState.loading;
 
     final fileStream = DefaultCacheManager().getFileStream(this.url,
         headers: this.requestHeaders as Map<String, String>?);
@@ -41,17 +45,21 @@ class ImageLoader {
           return;
         }
 
-        final imageBytes = fileResponse.file.readAsBytesSync();
+        try {
+          final imageBytes = fileResponse.file.readAsBytesSync();
 
-        this.state = LoadState.success;
-
-        ui.instantiateImageCodec(imageBytes).then((codec) {
-          this.frames = codec;
-          onComplete();
-        }, onError: (error) {
+          ui.instantiateImageCodec(imageBytes).then((codec) {
+            this.frames = codec;
+            this.state = LoadState.success;
+            onComplete();
+          }, onError: (error) {
+            this.state = LoadState.failure;
+            onComplete();
+          });
+        } catch (e) {
           this.state = LoadState.failure;
           onComplete();
-        });
+        }
       },
       onError: (error) {
         this.state = LoadState.failure;
@@ -93,15 +101,15 @@ class StoryImage extends StatefulWidget {
     Key? key,
   }) {
     return StoryImage(
-        ImageLoader(
-          url,
-          requestHeaders: requestHeaders,
-        ),
-        controller: controller,
-        fit: fit,
-        loadingWidget: loadingWidget,
-        errorWidget: errorWidget,
-        key: key,
+      ImageLoader(
+        url,
+        requestHeaders: requestHeaders,
+      ),
+      controller: controller,
+      fit: fit,
+      loadingWidget: loadingWidget,
+      errorWidget: errorWidget,
+      key: key,
     );
   }
 
@@ -120,6 +128,9 @@ class StoryImageState extends State<StoryImage> {
   void initState() {
     super.initState();
 
+    // Mark that loading has started
+    widget.controller?.startLoading();
+
     if (widget.controller != null) {
       this._streamSubscription =
           widget.controller!.playbackNotifier.listen((playbackState) {
@@ -136,14 +147,15 @@ class StoryImageState extends State<StoryImage> {
       });
     }
 
-    widget.controller?.pause();
-
     widget.imageLoader.loadImage(() async {
       if (mounted) {
         if (widget.imageLoader.state == LoadState.success) {
-          widget.controller?.play();
+          // Mark loading as finished and play the controller
+          widget.controller?.finishLoading();
           forward();
         } else {
+          // If loading failed, still finish loading to show error state
+          widget.controller?.finishLoading();
           // refresh to show error
           setState(() {});
         }
@@ -253,4 +265,3 @@ class ImageContentView extends StatelessWidget {
     }
   }
 }
-

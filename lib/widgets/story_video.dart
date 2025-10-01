@@ -23,10 +23,14 @@ class VideoLoader {
     if (this.videoFile != null) {
       this.state = LoadState.success;
       onComplete();
+      return;
     }
 
-    final fileStream = DefaultCacheManager()
-        .getFileStream(this.url, headers: this.requestHeaders as Map<String, String>?);
+    // Ensure we start with loading state
+    this.state = LoadState.loading;
+
+    final fileStream = DefaultCacheManager().getFileStream(this.url,
+        headers: this.requestHeaders as Map<String, String>?);
 
     fileStream.listen((fileResponse) {
       if (fileResponse is FileInfo) {
@@ -36,6 +40,9 @@ class VideoLoader {
           onComplete();
         }
       }
+    }, onError: (error) {
+      this.state = LoadState.failure;
+      onComplete();
     });
   }
 }
@@ -46,14 +53,16 @@ class StoryVideo extends StatefulWidget {
   final Widget? loadingWidget;
   final Widget? errorWidget;
 
-  StoryVideo(this.videoLoader, {
+  StoryVideo(
+    this.videoLoader, {
     Key? key,
     this.storyController,
     this.loadingWidget,
     this.errorWidget,
   }) : super(key: key ?? UniqueKey());
 
-  static StoryVideo url(String url, {
+  static StoryVideo url(
+    String url, {
     StoryController? controller,
     Map<String, dynamic>? requestHeaders,
     Key? key,
@@ -86,30 +95,45 @@ class StoryVideoState extends State<StoryVideo> {
   void initState() {
     super.initState();
 
-    widget.storyController!.pause();
+    // Mark that loading has started
+    widget.storyController!.startLoading();
 
     widget.videoLoader.loadVideo(() {
       if (widget.videoLoader.state == LoadState.success) {
         this.playerController =
             VideoPlayerController.file(widget.videoLoader.videoFile!);
 
+        // Initialize the video player and only finish loading when fully ready
         playerController!.initialize().then((v) {
-          setState(() {});
-          widget.storyController!.play();
+          if (mounted) {
+            setState(() {});
+            // Mark loading as finished and play the controller after video is fully initialized
+            widget.storyController!.finishLoading();
+          }
+        }).catchError((error) {
+          // If video initialization fails, still finish loading to show error state
+          if (mounted) {
+            setState(() {});
+            widget.storyController!.finishLoading();
+          }
         });
 
         if (widget.storyController != null) {
           _streamSubscription =
               widget.storyController!.playbackNotifier.listen((playbackState) {
             if (playbackState == PlaybackState.pause) {
-              playerController!.pause();
+              playerController?.pause();
             } else {
-              playerController!.play();
+              playerController?.play();
             }
           });
         }
       } else {
-        setState(() {});
+        // If loading failed, still finish loading to show error state
+        if (mounted) {
+          setState(() {});
+          widget.storyController!.finishLoading();
+        }
       }
     });
   }

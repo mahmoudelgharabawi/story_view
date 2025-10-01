@@ -11,6 +11,9 @@ class StoryController {
   /// Stream that broadcasts the playback state of the stories.
   final playbackNotifier = BehaviorSubject<PlaybackState>();
 
+  /// Tracks if the current story item is still loading
+  bool _isLoading = false;
+
   /// Notify listeners with a [PlaybackState.pause] state
   void pause() {
     playbackNotifier.add(PlaybackState.pause);
@@ -28,6 +31,21 @@ class StoryController {
   void previous() {
     playbackNotifier.add(PlaybackState.previous);
   }
+
+  /// Mark that loading has started
+  void startLoading() {
+    _isLoading = true;
+    pause();
+  }
+
+  /// Mark that loading has finished
+  void finishLoading() {
+    _isLoading = false;
+    play();
+  }
+
+  /// Check if currently loading
+  bool get isLoading => _isLoading;
 
   /// Remember to call dispose when the story screen is disposed to close
   /// the notifier stream.
