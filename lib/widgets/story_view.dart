@@ -510,7 +510,7 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
             debugPrint(
                 'STORY_DEBUG_V1: 📚 StoryView: Waiting for loading to finish or media to be visible');
             // Add a fallback timer in case visibility detection fails
-            Timer(Duration(milliseconds: 300), () {
+            Timer(Duration(milliseconds: 100), () {
               if (mounted &&
                   !widget.controller.isLoading &&
                   !widget.controller.isMediaVisible) {
