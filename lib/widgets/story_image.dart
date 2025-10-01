@@ -23,7 +23,11 @@ class ImageLoader {
   /// Load image from disk cache first, if not found then load from network.
   /// `onComplete` is called when [imageBytes] become available.
   void loadImage(VoidCallback onComplete) {
+    debugPrint(
+        'STORY_DEBUG_V1: 🖼️ ImageLoader: loadImage() called for URL: $url');
     if (this.frames != null) {
+      debugPrint(
+          'STORY_DEBUG: 🖼️ ImageLoader: Frames already available, marking as success');
       this.state = LoadState.success;
       onComplete();
       return;
@@ -31,37 +35,59 @@ class ImageLoader {
 
     // Ensure we start with loading state
     this.state = LoadState.loading;
+    debugPrint(
+        'STORY_DEBUG: 🖼️ ImageLoader: Starting to load from cache/network...');
 
     final fileStream = DefaultCacheManager().getFileStream(this.url,
         headers: this.requestHeaders as Map<String, String>?);
 
     fileStream.listen(
       (fileResponse) {
-        if (!(fileResponse is FileInfo)) return;
+        debugPrint(
+            'STORY_DEBUG_V1: 🖼️ ImageLoader: File stream response received');
+        if (!(fileResponse is FileInfo)) {
+          debugPrint(
+              'STORY_DEBUG_V1: 🖼️ ImageLoader: Not a FileInfo, ignoring');
+          return;
+        }
         // the reason for this is that, when the cache manager fetches
         // the image again from network, the provided `onComplete` should
         // not be called again
         if (this.frames != null) {
+          debugPrint(
+              '🖼️ ImageLoader: Frames already set, ignoring duplicate response');
           return;
         }
 
         try {
+          debugPrint(
+              'STORY_DEBUG: 🖼️ ImageLoader: Reading image bytes from file...');
           final imageBytes = fileResponse.file.readAsBytesSync();
+          debugPrint(
+              '🖼️ ImageLoader: Image bytes read, size: ${imageBytes.length} bytes');
 
           ui.instantiateImageCodec(imageBytes).then((codec) {
+            debugPrint(
+                'STORY_DEBUG: 🖼️ ImageLoader: Image codec instantiated successfully');
             this.frames = codec;
             this.state = LoadState.success;
             onComplete();
           }, onError: (error) {
+            debugPrint(
+                'STORY_DEBUG: 🖼️ ImageLoader: Failed to instantiate image codec: $error');
             this.state = LoadState.failure;
             onComplete();
           });
         } catch (e) {
+          debugPrint(
+              'STORY_DEBUG: 🖼️ ImageLoader: Exception while reading image bytes: $e');
           this.state = LoadState.failure;
           onComplete();
         }
       },
       onError: (error) {
+        debugPrint(
+            'STORY_DEBUG_V1: 🖼️ ImageLoader: Error in file stream: $error');
         this.state = LoadState.failure;
         onComplete();
       },
@@ -117,45 +143,78 @@ class StoryImage extends StatefulWidget {
   State<StatefulWidget> createState() => StoryImageState();
 }
 
-class StoryImageState extends State<StoryImage> {
+class StoryImageState extends State<StoryImage> with WidgetsBindingObserver {
   ui.Image? currentFrame;
 
   Timer? _timer;
 
   StreamSubscription<PlaybackState>? _streamSubscription;
 
+  bool _isVisible = false;
+
   @override
   void initState() {
     super.initState();
+    debugPrint(
+        '🖼️ StoryImage: initState() called for URL: ${widget.imageLoader.url}');
 
-    // Mark that loading has started
+    // Add observer for visibility changes
+    WidgetsBinding.instance.addObserver(this);
+
+    // Always start loading - this will pause the controller
     widget.controller?.startLoading();
 
     if (widget.controller != null) {
       this._streamSubscription =
           widget.controller!.playbackNotifier.listen((playbackState) {
+        debugPrint(
+            'STORY_DEBUG: 🖼️ StoryImage: PlaybackState changed to: $playbackState');
         // for the case of gifs we need to pause/play
         if (widget.imageLoader.frames == null) {
+          debugPrint(
+              '🖼️ StoryImage: No frames available yet, ignoring playback state');
           return;
         }
 
         if (playbackState == PlaybackState.pause) {
+          debugPrint('STORY_DEBUG_V1: 🖼️ StoryImage: Pausing animation');
           this._timer?.cancel();
         } else {
+          debugPrint('STORY_DEBUG_V1: 🖼️ StoryImage: Starting animation');
           forward();
         }
       });
     }
 
+    debugPrint('STORY_DEBUG_V1: 🖼️ StoryImage: Starting to load image...');
     widget.imageLoader.loadImage(() async {
+      debugPrint(
+          '🖼️ StoryImage: loadImage callback triggered - state: ${widget.imageLoader.state}');
       if (mounted) {
         if (widget.imageLoader.state == LoadState.success) {
-          // Mark loading as finished and play the controller
+          debugPrint(
+              'STORY_DEBUG_V1: 🖼️ StoryImage: Image loaded successfully, finishing loading');
+          // Mark loading as finished
           widget.controller?.finishLoading();
-          forward();
+          // Check visibility after image is loaded
+          _checkVisibility();
+
+          // Fallback: if visibility detection fails, mark as visible after a delay
+          Future.delayed(Duration(milliseconds: 200), () {
+            if (mounted && !_isVisible) {
+              debugPrint(
+                  'STORY_DEBUG: 👁️ StoryImage: Fallback - marking image as visible');
+              _isVisible = true;
+              widget.controller?.markMediaVisible();
+            }
+          });
         } else {
+          debugPrint(
+              'STORY_DEBUG_V1: 🖼️ StoryImage: Image loading failed, finishing loading anyway');
           // If loading failed, still finish loading to show error state
           widget.controller?.finishLoading();
+          // Check visibility even if loading failed
+          _checkVisibility();
           // refresh to show error
           setState(() {});
         }
@@ -167,8 +226,67 @@ class StoryImageState extends State<StoryImage> {
   void dispose() {
     _timer?.cancel();
     _streamSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
 
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _checkVisibility();
+    }
+  }
+
+  void _checkVisibility() {
+    debugPrint(
+        'STORY_DEBUG: 👁️ StoryImage: _checkVisibility() called - mounted: $mounted, _isVisible: $_isVisible');
+    if (!mounted) return;
+
+    // Use a post-frame callback to ensure the widget is fully rendered
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint(
+          'STORY_DEBUG: 👁️ StoryImage: Post-frame callback executing - mounted: $mounted, _isVisible: $_isVisible');
+      if (mounted && !_isVisible) {
+        final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+        debugPrint(
+            'STORY_DEBUG: 👁️ StoryImage: RenderBox found: ${renderBox != null}, hasSize: ${renderBox?.hasSize}');
+        if (renderBox != null && renderBox.hasSize) {
+          final position = renderBox.localToGlobal(Offset.zero);
+          final size = renderBox.size;
+          final screenSize = MediaQuery.of(context).size;
+
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryImage: Position: $position, Size: $size, ScreenSize: $screenSize');
+
+          // Check if the widget is visible on screen
+          final isVisible = position.dx < screenSize.width &&
+              position.dy < screenSize.height &&
+              position.dx + size.width > 0 &&
+              position.dy + size.height > 0;
+
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryImage: Calculated isVisible: $isVisible');
+
+          if (isVisible && !_isVisible) {
+            _isVisible = true;
+            debugPrint(
+                'STORY_DEBUG: 👁️ StoryImage: Image is now visible on screen');
+            widget.controller?.markMediaVisible();
+          } else {
+            debugPrint(
+                'STORY_DEBUG: 👁️ StoryImage: Image not visible or already marked visible');
+          }
+        } else {
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryImage: RenderBox not available or no size');
+        }
+      } else {
+        debugPrint(
+            'STORY_DEBUG: 👁️ StoryImage: Not checking visibility - mounted: $mounted, _isVisible: $_isVisible');
+      }
+    });
   }
 
   @override
@@ -200,6 +318,15 @@ class StoryImageState extends State<StoryImage> {
 
   @override
   Widget build(BuildContext context) {
+    // Check visibility when the widget is built and image is ready
+    if (widget.imageLoader.state == LoadState.success && !_isVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _checkVisibility();
+        }
+      });
+    }
+
     return Container(
       width: double.infinity,
       height: double.infinity,

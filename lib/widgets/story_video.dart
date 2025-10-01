@@ -84,43 +84,82 @@ class StoryVideo extends StatefulWidget {
   }
 }
 
-class StoryVideoState extends State<StoryVideo> {
+class StoryVideoState extends State<StoryVideo> with WidgetsBindingObserver {
   Future<void>? playerLoader;
 
   StreamSubscription? _streamSubscription;
 
   VideoPlayerController? playerController;
 
+  bool _isVisible = false;
+
   @override
   void initState() {
     super.initState();
+    debugPrint(
+        '🎥 StoryVideo: initState() called for URL: ${widget.videoLoader.url}');
 
-    // Mark that loading has started
+    // Add observer for visibility changes
+    WidgetsBinding.instance.addObserver(this);
+
+    // Always start loading - this will pause the controller
     widget.storyController!.startLoading();
 
+    debugPrint('STORY_DEBUG_V1: 🎥 StoryVideo: Starting to load video...');
     widget.videoLoader.loadVideo(() {
+      debugPrint(
+          '🎥 StoryVideo: loadVideo callback triggered - state: ${widget.videoLoader.state}');
       if (widget.videoLoader.state == LoadState.success) {
+        debugPrint(
+            'STORY_DEBUG: 🎥 StoryVideo: Video file loaded, initializing player...');
         this.playerController =
             VideoPlayerController.file(widget.videoLoader.videoFile!);
 
         // Initialize the video player and only finish loading when fully ready
         playerController!.initialize().then((v) {
+          debugPrint(
+              'STORY_DEBUG_V1: 🎥 StoryVideo: Video player initialized successfully');
           if (mounted) {
             setState(() {});
-            // Mark loading as finished and play the controller after video is fully initialized
+            // Mark loading as finished
+            debugPrint(
+                'STORY_DEBUG_V1: 🎥 StoryVideo: Video loaded, calling finishLoading');
             widget.storyController!.finishLoading();
+            // Check visibility after video is loaded and initialized
+            // Use a small delay to ensure the widget is fully rendered
+            Future.delayed(Duration(milliseconds: 100), () {
+              if (mounted) {
+                _checkVisibility();
+              }
+            });
+
+            // Fallback: if visibility detection fails, mark as visible after a delay
+            Future.delayed(Duration(milliseconds: 200), () {
+              if (mounted && !_isVisible) {
+                debugPrint(
+                    'STORY_DEBUG: 👁️ StoryVideo: Fallback - marking video as visible');
+                _isVisible = true;
+                widget.storyController?.markMediaVisible();
+              }
+            });
           }
         }).catchError((error) {
+          debugPrint(
+              'STORY_DEBUG: 🎥 StoryVideo: Video player initialization failed: $error');
           // If video initialization fails, still finish loading to show error state
           if (mounted) {
             setState(() {});
             widget.storyController!.finishLoading();
+            // Check visibility even if video initialization failed
+            _checkVisibility();
           }
         });
 
         if (widget.storyController != null) {
           _streamSubscription =
               widget.storyController!.playbackNotifier.listen((playbackState) {
+            debugPrint(
+                'STORY_DEBUG: 🎥 StoryVideo: PlaybackState changed to: $playbackState');
             if (playbackState == PlaybackState.pause) {
               playerController?.pause();
             } else {
@@ -129,10 +168,14 @@ class StoryVideoState extends State<StoryVideo> {
           });
         }
       } else {
+        debugPrint(
+            'STORY_DEBUG: 🎥 StoryVideo: Video loading failed, finishing loading anyway');
         // If loading failed, still finish loading to show error state
         if (mounted) {
           setState(() {});
           widget.storyController!.finishLoading();
+          // Check visibility even if loading failed
+          _checkVisibility();
         }
       }
     });
@@ -140,6 +183,18 @@ class StoryVideoState extends State<StoryVideo> {
 
   @override
   Widget build(BuildContext context) {
+    // Check visibility when the widget is built and video is ready
+    if (widget.videoLoader.state == LoadState.success &&
+        playerController != null &&
+        playerController!.value.isInitialized &&
+        !_isVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _checkVisibility();
+        }
+      });
+    }
+
     return Container(
       color: Colors.black,
       height: double.infinity,
@@ -157,7 +212,66 @@ class StoryVideoState extends State<StoryVideo> {
   void dispose() {
     playerController?.dispose();
     _streamSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _checkVisibility();
+    }
+  }
+
+  void _checkVisibility() {
+    debugPrint(
+        'STORY_DEBUG: 👁️ StoryVideo: _checkVisibility() called - mounted: $mounted, _isVisible: $_isVisible');
+    if (!mounted) return;
+
+    // Use a post-frame callback to ensure the widget is fully rendered
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint(
+          'STORY_DEBUG: 👁️ StoryVideo: Post-frame callback executing - mounted: $mounted, _isVisible: $_isVisible');
+      if (mounted && !_isVisible) {
+        final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+        debugPrint(
+            'STORY_DEBUG: 👁️ StoryVideo: RenderBox found: ${renderBox != null}, hasSize: ${renderBox?.hasSize}');
+        if (renderBox != null && renderBox.hasSize) {
+          final position = renderBox.localToGlobal(Offset.zero);
+          final size = renderBox.size;
+          final screenSize = MediaQuery.of(context).size;
+
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryVideo: Position: $position, Size: $size, ScreenSize: $screenSize');
+
+          // Check if the widget is visible on screen
+          final isVisible = position.dx < screenSize.width &&
+              position.dy < screenSize.height &&
+              position.dx + size.width > 0 &&
+              position.dy + size.height > 0;
+
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryVideo: Calculated isVisible: $isVisible');
+
+          if (isVisible && !_isVisible) {
+            _isVisible = true;
+            debugPrint(
+                'STORY_DEBUG: 👁️ StoryVideo: Video is now visible on screen');
+            widget.storyController?.markMediaVisible();
+          } else {
+            debugPrint(
+                'STORY_DEBUG: 👁️ StoryVideo: Video not visible or already marked visible');
+          }
+        } else {
+          debugPrint(
+              'STORY_DEBUG: 👁️ StoryVideo: RenderBox not available or no size');
+        }
+      } else {
+        debugPrint(
+            'STORY_DEBUG: 👁️ StoryVideo: Not checking visibility - mounted: $mounted, _isVisible: $_isVisible');
+      }
+    });
   }
 }
 

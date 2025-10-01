@@ -451,6 +451,7 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
   StreamSubscription<PlaybackState>? _playbackSubscription;
 
   VerticalDragInfo? verticalDragInfo;
+  bool _waitingForMediaInit = false;
 
   StoryItem? get _currentStory {
     return widget.storyItems.firstWhereOrNull((it) => !it!.shown);
@@ -482,23 +483,59 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
 
     this._playbackSubscription =
         widget.controller.playbackNotifier.listen((playbackStatus) {
+      debugPrint(
+          'STORY_DEBUG_V1: 📚 StoryView: PlaybackState received: $playbackStatus');
       switch (playbackStatus) {
         case PlaybackState.play:
+          debugPrint(
+              'STORY_DEBUG_V1: 📚 StoryView: Starting animation forward');
           _removeNextHold();
-          this._animationController?.forward();
+          // Only start animation if not loading and media is visible
+
+          debugPrint(
+              'STORY_DEBUG_V1: 📚 StoryView: is widget loading: ${widget.controller.isLoading}, is media visible: ${widget.controller.isMediaVisible}');
+          debugPrint(
+              'STORY_DEBUG_V1: 📚 StoryView: animation controller exists: ${_animationController != null}');
+          debugPrint(
+              'STORY_DEBUG_V1: 📚 StoryView: animation controller isAnimating: ${_animationController?.isAnimating}');
+          debugPrint(
+              'STORY_DEBUG_V1: 📚 StoryView: animation controller status: ${_animationController?.status}');
+
+          if (!widget.controller.isLoading &&
+              widget.controller.isMediaVisible) {
+            debugPrint(
+                'STORY_DEBUG_V1: 📚 StoryView: Not loading and media visible, starting animation');
+            this._animationController?.forward();
+          } else {
+            debugPrint(
+                'STORY_DEBUG_V1: 📚 StoryView: Waiting for loading to finish or media to be visible');
+            // Add a fallback timer in case visibility detection fails
+            Timer(Duration(milliseconds: 300), () {
+              if (mounted &&
+                  !widget.controller.isLoading &&
+                  !widget.controller.isMediaVisible) {
+                debugPrint(
+                    'STORY_DEBUG_V1: 📚 StoryView: Fallback timer triggered - forcing media visible');
+                widget.controller.markMediaVisible();
+              }
+            });
+          }
           break;
 
         case PlaybackState.pause:
+          debugPrint('STORY_DEBUG_V1: 📚 StoryView: Pausing animation');
           _holdNext(); // then pause animation
           this._animationController?.stop(canceled: false);
           break;
 
         case PlaybackState.next:
+          debugPrint('STORY_DEBUG_V1: 📚 StoryView: Going to next story');
           _removeNextHold();
           _goForward();
           break;
 
         case PlaybackState.previous:
+          debugPrint('STORY_DEBUG_V1: 📚 StoryView: Going to previous story');
           _removeNextHold();
           _goBack();
           break;
@@ -526,19 +563,20 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
   }
 
   void _play() {
+    debugPrint('STORY_DEBUG_V1: 📚 StoryView: _play() called');
     _animationController?.dispose();
+
+    // Reset media visibility state for new story
+    widget.controller.markMediaNotVisible();
+
     // get the next playing page
     final storyItem = widget.storyItems.firstWhere((it) {
       return !it!.shown;
     })!;
 
     final storyItemIndex = widget.storyItems.indexOf(storyItem);
-
-    // Reset loading state for new story item
-    // The story item will call startLoading() if it needs to load content
-    if (widget.controller.isLoading) {
-      widget.controller.finishLoading();
-    }
+    debugPrint(
+        'STORY_DEBUG_V1: 📚 StoryView: Playing story item at index $storyItemIndex, duration: ${storyItem.duration}');
 
     if (widget.onStoryShow != null) {
       widget.onStoryShow!(storyItem, storyItemIndex);
@@ -548,6 +586,8 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
         AnimationController(duration: storyItem.duration, vsync: this);
 
     _animationController!.addStatusListener((status) {
+      debugPrint(
+          'STORY_DEBUG_V1: 📚 StoryView: Animation status changed to: $status');
       if (status == AnimationStatus.completed) {
         storyItem.shown = true;
         if (widget.storyItems.last != storyItem) {
@@ -562,11 +602,32 @@ class StoryViewState extends State<StoryView> with TickerProviderStateMixin {
     _currentAnimation =
         Tween(begin: 0.0, end: 1.0).animate(_animationController!);
 
-    // Start playing - but only if not currently loading
-    // The individual story items will control loading state via startLoading/finishLoading
-    if (!widget.controller.isLoading) {
+    // Give media widgets a chance to call startLoading(), then trigger play
+    debugPrint(
+        'STORY_DEBUG_V1: 📚 StoryView: Animation controller ready, waiting for media to load');
+
+    // Set a flag to indicate we're waiting for media widgets to initialize
+    _waitingForMediaInit = true;
+    debugPrint(
+        'STORY_DEBUG_V1: 📚 StoryView: Waiting for media widgets to initialize');
+
+    // Set up a callback for when media widgets are ready
+    widget.controller.setMediaReadyCallback(() {
+      debugPrint(
+          'STORY_DEBUG_V1: 📚 StoryView: Media widgets ready, triggering play');
+      _waitingForMediaInit = false;
       widget.controller.play();
-    }
+    });
+
+    // Fallback timer in case media widgets don't call the callback
+    Timer(Duration(milliseconds: 1000), () {
+      if (_waitingForMediaInit) {
+        debugPrint(
+            'STORY_DEBUG_V1: 📚 StoryView: Fallback timer triggered - media widgets may not be present');
+        _waitingForMediaInit = false;
+        widget.controller.play();
+      }
+    });
   }
 
   void _beginPlay() {
